@@ -1,0 +1,74 @@
+<?php
+
+function generateRandomBarcode($length = 8) {
+    return substr(str_shuffle(str_repeat('0123456789', $length)), 0, $length);
+}
+
+function addOrder($event_id, $event_date, $ticket_adult_price, $ticket_adult_quantity, $ticket_kid_price, $ticket_kid_quantity) {
+    $mysqli = new mysqli("host", "username", "password", "database");
+
+    if ($mysqli->connect_error) {
+        die("Connection failed: " . $mysqli->connect_error);
+    }
+
+    do {
+        $barcode = generateRandomBarcode();
+        $reservationResponse = bookOrder($event_id, $event_date, $ticket_adult_price, $ticket_adult_quantity, $ticket_kid_price, $ticket_kid_quantity, $barcode);
+    } while ($reservationResponse['error'] == 'barcode already exists');
+
+    if ($reservationResponse['message'] == 'order successfully booked') {
+        $approvalResponse = approveOrder($barcode);
+        
+        if ($approvalResponse['message'] == 'order successfully approved') {
+            $equal_price = ($ticket_adult_price * $ticket_adult_quantity) + ($ticket_kid_price * $ticket_kid_quantity);
+            $created = date('Y-m-d H:i:s');
+
+            $stmt = $mysqli->prepare("INSERT INTO orders (event_id, event_date, ticket_adult_price, ticket_adult_quantity, ticket_kid_price, ticket_kid_quantity, barcode, equal_price, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+
+            $stmt->bind_param("isiiiiisi", $event_id, $event_date, $ticket_adult_price, $ticket_adult_quantity, $ticket_kid_price, $ticket_kid_quantity, $barcode, $equal_price, $created);
+
+            if ($stmt->execute()) {
+                echo "Order added successfully!";
+            } else {
+                echo "Error: " . $stmt->error;
+            }
+
+            $stmt->close();
+        } else {
+            echo "Order approval failed: " . $approvalResponse['error'];
+        }
+    } else {
+        echo "Order booking failed: " . $reservationResponse['error'];
+    }
+
+    $mysqli->close();
+}
+
+function bookOrder($event_id, $event_date, $ticket_adult_price, $ticket_adult_quantity, $ticket_kid_price, $ticket_kid_quantity, $barcode) {
+    // Mock API response
+    // In actual code, use cURL or file_get_contents() to make the request
+    $responses = [
+        ['message' => 'order successfully booked'],
+        ['error' => 'barcode already exists']
+    ];
+
+    return $responses[array_rand($responses)];
+}
+
+function approveOrder($barcode) {
+    // Mock API response
+    // In actual code, use cURL or file_get_contents() to make the request
+    $responses = [
+        ['message' => 'order successfully approved'],
+        ['error' => 'event cancelled'],
+        ['error' => 'no tickets'],
+        ['error' => 'no seats'],
+        ['error' => 'fan removed']
+    ];
+
+    return $responses[array_rand($responses)];
+}
+
+// Example usage
+addOrder(3, '2021-08-15 17:00:00', 700, 4, 450, 3);
+?>

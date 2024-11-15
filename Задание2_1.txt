@@ -1,0 +1,75 @@
+1.
+<?php
+function createOrder($event_id, $user_id, $tickets) {
+    $mysqli = new mysqli("host", "username", "password", "database");
+
+    if ($mysqli->connect_error) {
+        die("Connection failed: " . $mysqli->connect_error);
+    }
+
+    $barcode = generateRandomBarcode();
+    $equal_price = 0;
+    $created = date('Y-m-d H:i:s');
+
+    // Вставка нового заказа
+    $stmt = $mysqli->prepare("INSERT INTO orders (event_id, user_id, barcode, equal_price, created) VALUES (?, ?, ?, ?, ?)");
+    $stmt->bind_param("issis", $event_id, $user_id, $barcode, $equal_price, $created);
+
+    if (!$stmt->execute()) {
+        echo "Error: " . $stmt->error;
+        return;
+    }
+
+    $order_id = $stmt->insert_id;
+    $stmt->close();
+
+    // Обработка типов билетов и их вставка
+    foreach ($tickets as $ticket_type => $details) {
+        // Вычисление общей стоимости заказа
+        $equal_price += $details['price'] * $details['quantity'];
+
+        // Получение идентификатора типа билета
+        $stmt = $mysqli->prepare("SELECT id FROM ticket_types WHERE name = ?");
+        $stmt->bind_param("s", $ticket_type);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $type = $result->fetch_assoc();
+        $ticket_type_id = $type['id'];
+        $stmt->close();
+
+        // Вставка информации о билетах в заказ
+        $stmt = $mysqli->prepare("INSERT INTO ticket_orders (order_id, ticket_type_id, price, quantity) VALUES (?, ?, ?, ?)");
+        $stmt->bind_param("iiii", $order_id, $ticket_type_id, $details['price'], $details['quantity']);
+        $stmt->execute();
+        $stmt->close();
+    }
+
+    // Обновление общей стоимости заказа
+    $stmt = $mysqli->prepare("UPDATE orders SET equal_price = ? WHERE id = ?");
+    $stmt->bind_param("ii", $equal_price, $order_id);
+    $stmt->execute();
+    $stmt->close();
+
+    echo "Order created successfully with ID: " . $order_id;
+    $mysqli->close();
+}
+
+function generateRandomBarcode($length = 8) {
+    return substr(str_shuffle(str_repeat('0123456789', $length)), 0, $length);
+}
+
+// Пример вызова функции
+$tickets = [
+    'adult' => ['price' => 700, 'quantity' => 1],
+    'kid' => ['price' => 450, 'quantity' => 0],
+    'discounted' => ['price' => 350, 'quantity' => 2],
+    'group' => ['price' => 600, 'quantity' => 1]
+];
+
+createOrder(3, '00451', $tickets);
+?>
+Объяснение PHP кода:
+Процесс создания заказа: Функция createOrder() принимает event_id, user_id и массив $tickets, который содержит информацию о типах билетов, ценах и количестве.
+Обработка данных о билетах: Для каждого типа билета из переданного массива проверяется его существование и производится вставка информации о билете в связующую таблицу.
+Обновление общей стоимости: Итоговая стоимость заказа обновляется в таблице orders после вставки всех типов билетов.
+Безопасность: Использование подготовленных выражений защитит от SQL-инъекций и других потенциальных проблем с безопасностью.

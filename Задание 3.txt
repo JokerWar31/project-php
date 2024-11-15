@@ -1,0 +1,124 @@
+Цель этого проекта — нормализовать структуру базы данных для обработки заказов с несколькими типами билетов и реализовать функцию для добавления заказов с учетом взаимодействия со сторонней API системой бронирования.
+
+Задание №1: Функция добавления заказов
+Описание функции
+Функция addOrder предназначена для добавления заказов в базу данных и взаимодействия со сторонним API для бронирования и подтверждения заказа. Функция принимает следующие параметры:
+
+event_id
+event_date
+ticket_adult_price
+ticket_adult_quantity
+ticket_kid_price
+ticket_kid_quantity
+Процесс добавления заказа
+Генерация уникального штрих-кода: Для каждого заказа генерируется уникальный, случайный штрих-код. Это важный шаг для обеспечения уникальности и предотвращения присвоения одинаковых штрих-кодов разным заказам.
+Бронирование через API: Выполняется HTTP POST запрос к https://api.site.com/book с необходимыми данными. Если API возвращает ошибку barcode already exists, штрих-код генерируется заново и запрос повторяется.
+Подтверждение заказа: После успешного бронирования отправляется запрос к https://api.site.com/approve с параметром barcode. Проверяется ответ на успешность или наличие ошибок.
+Сохранение заказа в базе данных: Если подтверждение прошло успешно, данные заказа сохраняются в базе данных MySQL. Сохраняются основные поля, а также рассчитывается equal_price — общая стоимость заказа.
+Реализация
+<?php
+function generateBarcode() {
+    return substr(str_shuffle("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 0, 8);
+}
+
+function sendApiRequest($url, $data) {
+    // Симуляция API запроса с помощью cURL.
+    // Этот метод возвращает либо успех, либо случайную ошибку.
+    $responses = [
+        json_encode(['message' => 'order successfully booked']),
+        json_encode(['error' => 'barcode already exists']),
+        json_encode(['message' => 'order successfully aproved']),
+        json_encode(['error' => 'event cancelled']),
+        json_encode(['error' => 'no tickets']),
+        json_encode(['error' => 'no seats']),
+        json_encode(['error' => 'fan removed'])
+    ];
+    return $responses[array_rand($responses)];
+}
+
+function addOrder($event_id, $event_date, $ticket_adult_price, $ticket_adult_quantity, $ticket_kid_price, $ticket_kid_quantity) {
+    $barcode = generateBarcode();
+    $created = date('Y-m-d H:i:s');
+
+    do {
+        $response = json_decode(sendApiRequest("https://api.site.com/book", [
+            'event_id' => $event_id,
+            'event_date' => $event_date,
+            'ticket_adult_price' => $ticket_adult_price,
+            'ticket_adult_quantity' => $ticket_adult_quantity,
+            'ticket_kid_price' => $ticket_kid_price,
+            'ticket_kid_quantity' => $ticket_kid_quantity,
+            'barcode' => $barcode
+        ]), true);
+
+        if (isset($response['error']) && $response['error'] === 'barcode already exists') {
+            $barcode = generateBarcode();
+        } else {
+            break;
+        }
+    } while (true);
+
+    if (isset($response['message']) && $response['message'] === 'order successfully booked') {
+        $confirmResponse = json_decode(sendApiRequest("https://api.site.com/approve", ['barcode' => $barcode]), true);
+
+        if (isset($confirmResponse['message']) && $confirmResponse['message'] === 'order successfully aproved') {
+            // Подключение к базе данных и сохранение данных
+            $mysqli = new mysqli("localhost", "username", "password", "database");
+
+            if ($mysqli->connect_error) {
+                die("Connection failed: " . $mysqli->connect_error);
+            }
+
+            $equal_price = ($ticket_adult_price * $ticket_adult_quantity) + ($ticket_kid_price * $ticket_kid_quantity);
+
+            $stmt = $mysqli->prepare("INSERT INTO orders (event_id, event_date, ticket_adult_price, ticket_adult_quantity, ticket_kid_price, ticket_kid_quantity, barcode, user_id, equal_price, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("isiiiiisss", $event_id, $event_date, $ticket_adult_price, $ticket_adult_quantity, $ticket_kid_price, $ticket_kid_quantity, $barcode, $user_id, $equal_price, $created);
+
+            if ($stmt->execute()) {
+                echo "Order added successfully!";
+            } else {
+                echo "Error: " . $stmt->error;
+            }
+
+            $stmt->close();
+            $mysqli->close();
+        } else {
+            echo "Order confirmation failed: " . $confirmResponse['error'];
+        }
+    } else {
+        echo "Order booking failed: " . $response['error'];
+    }
+}
+?>
+Задание №2: Нормализация таблицы для поддержки нескольких типов билетов
+Определение проблемы
+Изначально, таблица "orders" хранила данные с фиксированными типами билетов: взрослый и детский. В случае увеличения типов билетов (например, льготный и групповой) такому подходу станет сложно соответствовать без значительных переделок и дублирования структуры.
+
+Решение
+Чтобы учесть все возможные типы билетов и каждому выдать уникальный баркод, были предложены следующие изменения:
+
+Создание таблицы orders: Содержит основную информацию о заказе, например, event_id, user_id, equal_price, created.
+    CREATE TABLE orders (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        event_id INT NOT NULL,
+        user_id VARCHAR(50) NOT NULL,
+        equal_price INT NOT NULL,
+        created DATETIME NOT NULL
+    );
+Создание таблицы tickets: Хранит информацию о каждом билете. Включает order_id для привязки к заказу, barcode для уникальности, ticket_type (например, взрослый, детский, льготный, групповой), price, и event_date.
+    CREATE TABLE tickets (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        order_id INT NOT NULL,
+        barcode VARCHAR(120) UNIQUE NOT NULL,
+        ticket_type ENUM('adult', 'kid', 'discounted', 'group') NOT NULL,
+        price INT NOT NULL,
+        event_date DATETIME NOT NULL,
+        created DATETIME NOT NULL,
+        FOREIGN KEY (order_id) REFERENCES orders(id)
+    );
+Пояснение решения
+Нормализация: Декомпозиция исходной таблицы позволяет убрать избыточность данных (например, многократные поля для каждого типа билета). Таблица tickets позволяет легко добавлять новые типы билетов.
+Гибкость: Новые типы билетов можно ввести, просто добавив идентификатор типа в поле ticket_type.
+Уникальные баркоды: Управление билетом стало легче за счет уникального штрих-кода для каждого билета, что важно для учета и валидации.
+Вывод
+В результате выполнения задачи были нормализованы таблицы БД, обеспечена поддержка различных типов билетов, реализована функция добавления заказов с уникальными штрих-кодами и обеспечен автоматический процесс бронирования и подтверждения через внешнюю API. Такой подход предоставляет гибкость в управлении данными и облегчает дальнейшее обслуживание системы.
